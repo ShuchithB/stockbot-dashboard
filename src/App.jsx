@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 
-const API_BASE = "https://stockbot-backend.onrender.com";
+const API_BASE = "https://stockbot-backend-39ec.onrender.com";
 
 export default function App() {
   const [summary, setSummary] = useState(null);
@@ -76,3 +76,4 @@ export default function App() {
     </div>
   );
 }
+
