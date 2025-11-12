@@ -1,34 +1,52 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
 
-const API_BASE = "https://stockbot-backend-39ec.onrender.com"; // <-- your backend URL
+const API_BASE = "https://stockbot-backend.onrender.com"; // change to your backend URL
 
 export default function App() {
   const [apiKey, setApiKey] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [startDate, setStartDate] = useState("2024-01-01");
   const [endDate, setEndDate] = useState("2025-01-01");
-
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [result, setResult] = useState(null);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("token_success")) {
+      setMessage("✅ Access Token generated successfully!");
+    } else if (params.get("token_error")) {
+      setMessage("❌ Token generation failed. Please try again.");
+    }
+  }, []);
+
+  const generateToken = async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/generate_token_url`);
+      window.location.href = res.data.login_url;
+    } catch {
+      setMessage("❌ Failed to connect to backend for login URL.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const runBacktest = async () => {
     setLoading(true);
     setMessage("");
-    setResult(null);
     try {
-      const response = await axios.post(`${API_BASE}/run_once`, {
+      const res = await axios.post(`${API_BASE}/run_once`, {
         api_key: apiKey,
         access_token: accessToken,
         start_date: startDate,
         end_date: endDate,
       });
-      setMessage("✅ Backtest launched successfully!");
-      setResult(response.data);
-    } catch (error) {
-      console.error(error);
-      setMessage("❌ Failed to start backtest. Check API key or backend logs.");
+      setMessage("✅ Backtest started successfully!");
+      setResult(res.data);
+    } catch {
+      setMessage("❌ Failed to start backtest. Check your token or API key.");
     } finally {
       setLoading(false);
     }
@@ -38,13 +56,21 @@ export default function App() {
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-6">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-8">
         <h1 className="text-3xl font-bold text-center mb-4 text-gray-800">
-          📈 StockBot Backtest Dashboard
+          📈 StockBot Dashboard
         </h1>
-        <p className="text-sm text-gray-500 text-center mb-6">
+        <p className="text-center text-sm text-gray-500 mb-6">
           Connected to backend: <span className="text-blue-600">{API_BASE}</span>
         </p>
 
         <div className="space-y-4">
+          <button
+            onClick={generateToken}
+            disabled={loading}
+            className="w-full py-2 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700"
+          >
+            🔑 Generate Kite Access Token
+          </button>
+
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
               Kite API Key
@@ -53,21 +79,21 @@ export default function App() {
               type="text"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 focus:ring focus:ring-blue-200"
-              placeholder="Enter your Kite API Key"
+              className="w-full border border-gray-300 rounded-lg p-2"
+              placeholder="Enter your Kite API Key (optional)"
             />
           </div>
 
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Kite Access Token
+              Kite Access Token (optional)
             </label>
             <input
               type="text"
               value={accessToken}
               onChange={(e) => setAccessToken(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 focus:ring focus:ring-blue-200"
-              placeholder="Enter your Access Token"
+              className="w-full border border-gray-300 rounded-lg p-2"
+              placeholder="Leave blank to use stored token"
             />
           </div>
 
@@ -128,7 +154,7 @@ export default function App() {
       </div>
 
       <footer className="text-center mt-6 text-gray-500 text-sm">
-        Developed by StockBot | Powered by FastAPI + Render
+        © {new Date().getFullYear()} StockBot | Powered by FastAPI + React + Render
       </footer>
     </div>
   );
