@@ -93,6 +93,7 @@ export default function App(){
           <select value={strategy} onChange={e=>setStrategy(e.target.value)}>
             <option value="swing">Swing Strategy (ATR/MACD/RSI)</option>
             <option value="momentum">Momentum (fast)</option>
+            <option value="fast_swing">Fast Swing Strategy (v2)</option>
           </select>
         </label>
 
@@ -148,4 +149,5 @@ export default function App(){
     </div>
   );
 }
+
 
