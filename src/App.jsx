@@ -1,298 +1,251 @@
 // src/App.jsx
-import React, { useEffect, useState } from "react";
-import axios from "axios";
+import React, { useEffect, useState, useRef } from "react";
 import {
-  LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip,
-  PieChart, Pie, Cell, ResponsiveContainer
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend
 } from "recharts";
 
-const API_BASE = "https://stockbot-backend-39ec.onrender.com"; // <<-- CHANGE to your backend URL if different
-const COLORS = ["#10b981", "#ef4444"];
+const BACKEND = import.meta.env.VITE_BACKEND_URL || "https://stockbot-backend-39ec.onrender.com";
+const FRONTEND_URL = window.location.origin;
 
-function shortDate(d) {
-  try {
-    return new Date(d).toLocaleDateString();
-  } catch {
-    return d;
-  }
+function shortTokenPreview(t) {
+  if (!t) return "";
+  return t.slice(-8);
 }
 
 export default function App() {
+  const [connectedBackend, setConnectedBackend] = useState(BACKEND);
+  const [tokenOk, setTokenOk] = useState(false);
+  const [tokenPreview, setTokenPreview] = useState(null);
   const [strategy, setStrategy] = useState("swing");
   const [startDate, setStartDate] = useState("2024-03-01");
   const [endDate, setEndDate] = useState("2025-11-10");
-  const [running, setRunning] = useState(false);
-  const [message, setMessage] = useState("");
-  const [history, setHistory] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [runningJob, setRunningJob] = useState(null);
+  const pollingRef = useRef(null);
+  const [latestRun, setLatestRun] = useState(null);
+  const [equityData, setEquityData] = useState([]);
+  const [winLossData, setWinLossData] = useState([]);
+  const [statusMessage, setStatusMessage] = useState("");
 
   useEffect(() => {
-    fetchHistory();
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("token_success")) {
-      setMessage("✅ Kite token generated. Now you can Run tests.");
-    } else if (params.get("token_error")) {
-      setMessage("❌ Token generation failed.");
-    }
+    // On load: check debug/token and /latest
+    fetch(`${BACKEND}/debug/token`).then(r => r.json()).then(d => {
+      if (d?.has_token) {
+        setTokenOk(true);
+        setTokenPreview(d.token_preview);
+      } else {
+        setTokenOk(false);
+        setTokenPreview(null);
+      }
+    }).catch(_ => { setTokenOk(false); });
+
+    fetchLatest();
   }, []);
 
-  const fetchHistory = async () => {
+  async function fetchLatest() {
     try {
-      const res = await axios.get(`${API_BASE}/backtests`);
-      setHistory(res.data.backtests || []);
-    } catch (err) {
-      console.error("Failed load history", err);
+      const r = await fetch(`${BACKEND}/latest`);
+      const j = await r.json();
+      if (j?.status === "ok" && j?.data) {
+        setLatestRun(j.data);
+        mapCharts(j.data);
+      } else {
+        setLatestRun(null);
+        setEquityData([]);
+        setWinLossData([]);
+      }
+    } catch (e) {
+      console.error("fetchLatest err", e);
     }
-  };
+  }
 
-  const handleLogin = async () => {
-    setMessage("");
-    try {
-      const res = await axios.get(`${API_BASE}/generate_token_url`);
-      window.location.href = res.data.login_url;
-    } catch (err) {
-      setMessage("❌ Failed to connect to backend for login URL.");
-    }
-  };
-
-  const runNow = async () => {
-    setRunning(true);
-    setMessage("Launching backtest (background). This may take a while...");
-    try {
-      const payload = {
-        strategy,
-        start_date: startDate,
-        end_date: endDate,
-        symbols_file: "nifty100.csv"
+  function mapCharts(run) {
+    // equity: array of {date, portfolio_equity or similar}
+    const eq = (run.equity_curve || run.equity || []).map((r) => {
+      return {
+        date: r.date || r[0] || "",
+        portfolio_equity: Number(r.portfolio_equity || r.equity || r[1] || 0)
       };
-      const res = await axios.post(`${API_BASE}/run_strategy`, payload);
-      setMessage(res.data.message || "Started");
-      // refresh history after a short delay (adjust as needed)
-      setTimeout(() => { fetchHistory(); }, 5000);
-    } catch (err) {
-      const detail = err?.response?.data?.detail || err.message;
-      setMessage("❌ Failed to start: " + detail);
-    } finally {
-      setRunning(false);
+    });
+    setEquityData(eq);
+
+    // win/loss from trades
+    const trades = run.trades || [];
+    let wins = 0, losses = 0;
+    trades.forEach(t => {
+      const pnl = Number(t.PnL ?? t.PnL ?? 0);
+      if (!isNaN(pnl) && pnl > 0) wins++;
+      else losses++;
+    });
+    const wl = [{ name: "Wins", value: wins }, { name: "Losses", value: losses }];
+    setWinLossData(wl);
+  }
+
+  async function handleGenerateToken() {
+    try {
+      const r = await fetch(`${BACKEND}/generate_token_url`);
+      const j = await r.json();
+      if (j.login_url) {
+        window.location.href = j.login_url; // Open kite login
+      } else {
+        setStatusMessage("Failed to get login URL from backend");
+      }
+    } catch (e) {
+      console.error(e);
+      setStatusMessage("Failed to call backend /generate_token_url");
     }
-  };
+  }
 
-  // pick last run for charts
-  const last = history[0] || null;
-  const equityCurve = last?.equity_curve || last?.equity || [];
-  const tradeList = last?.trades || [];
-  const summary = last?.summary || {};
+  async function handleRunNow() {
+    setStatusMessage("");
+    if (!tokenOk) {
+      setStatusMessage("No Kite access token found. Generate via Login with Kite first.");
+      return;
+    }
+    // start job
+    const payload = {
+      strategy,
+      start_date: startDate,
+      end_date: endDate,
+      symbols_file: "nifty100.csv"
+    };
+    try {
+      const r = await fetch(`${BACKEND}/run_strategy`, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      if (j.job_id) {
+        setStatusMessage("Backtest started. Polling job...");
+        setRunningJob(j.job_id);
+        pollJob(j.job_id);
+      } else if (j.detail) {
+        setStatusMessage("Failed to start: " + j.detail);
+      } else {
+        setStatusMessage("Unexpected response from run_strategy");
+      }
+    } catch (e) {
+      console.error("run err", e);
+      setStatusMessage("Failed to call run_strategy");
+    }
+  }
 
-  const winCount = tradeList.filter(t => (t.PnL || 0) > 0).length;
-  const lossCount = tradeList.length - winCount;
+  async function pollJob(jobId) {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    pollingRef.current = setInterval(async () => {
+      try {
+        const r = await fetch(`${BACKEND}/job_status/${jobId}`);
+        const j = await r.json();
+        if (j?.status) {
+          setStatusMessage(`Job ${jobId}: ${j.status}`);
+          if (j.status === "completed") {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            setRunningJob(null);
+            // fetch latest
+            await fetchLatest();
+            setStatusMessage("Backtest completed and saved.");
+          } else if (j.status === "failed" || j.status === "cancelled") {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            setRunningJob(null);
+            setStatusMessage(`Job ${jobId} ended: ${j.error || j.status}`);
+          }
+        } else {
+          // fallback
+          console.warn("unexpected job_status response", j);
+        }
+      } catch (e) {
+        console.error("poll error", e);
+      }
+    }, 4000);
+  }
+
+  async function handleRefreshHistory() {
+    await fetchLatest();
+    setStatusMessage("History refreshed.");
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black text-white p-6 flex flex-col items-center">
-      <header className="w-full max-w-5xl mb-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">
-            ⚡ StockBot Dashboard
-          </h1>
-          <div>
-            <button
-              onClick={handleLogin}
-              className="px-4 py-2 bg-yellow-400 text-black rounded-xl shadow"
-            >
-              🔑 Login with Kite
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-gray-300 mt-2">Connected to backend: <span className="text-blue-300">{API_BASE}</span></p>
-      </header>
+    <div style={{ padding: 20, maxWidth: 1000, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
+      <h1 style={{ fontSize: 36, marginBottom: 6 }}>⚡ StockBot Dashboard</h1>
 
-      {/* Controls */}
-      <div className="w-full max-w-5xl bg-white/5 p-6 rounded-2xl mb-6">
-        <div className="grid md:grid-cols-3 gap-4 items-end">
-          <div>
-            <label className="block text-sm mb-1">Strategy</label>
-            <select value={strategy} onChange={(e)=>setStrategy(e.target.value)} className="w-full p-2 rounded bg-white/10">
-              <option value="swing">Swing Strategy (ATR/MACD/RSI) — full test</option>
-              <option value="momentum">Momentum (fast test - single symbol)</option>
-            </select>
-          </div>
+      <button onClick={handleGenerateToken} style={{ padding: "8px 14px", marginBottom: 12 }}>
+        🔑 Login with Kite
+      </button>
+      <div style={{ marginBottom: 12 }}>Connected to backend: {connectedBackend}</div>
 
-          <div>
-            <label className="block text-sm mb-1">Start Date</label>
-            <input type="date" value={startDate} onChange={(e)=>setStartDate(e.target.value)} className="w-full p-2 rounded bg-white/5"/>
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">End Date</label>
-            <input type="date" value={endDate} onChange={(e)=>setEndDate(e.target.value)} className="w-full p-2 rounded bg-white/5"/>
-          </div>
-        </div>
-
-        <div className="mt-4 flex items-center gap-3">
-          <button
-            onClick={runNow}
-            disabled={running}
-            className={`px-6 py-2 rounded-2xl font-semibold ${running ? "bg-gray-500" : "bg-green-600 hover:bg-green-700"}`}
-          >
-            {running ? "Starting..." : "Run Now"}
-          </button>
-
-          <button onClick={() => fetchHistory()} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700">Refresh History</button>
-
-          <div className="ml-auto text-sm text-gray-300">
-            <span className="font-medium">Last run:</span> { last ? shortDate(last.timestamp) : "No runs yet" }
-          </div>
-        </div>
-
-        {message && <p className="mt-3 text-sm text-yellow-300">{message}</p>}
+      <div style={{ marginBottom: 8 }}>
+        Strategy{" "}
+        <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+          <option value="swing">Swing Strategy (ATR/MACD/RSI)</option>
+          <option value="momentum">Momentum (dev)</option>
+        </select>
       </div>
 
-      {/* Main dashboard (charts & history) */}
-      <div className="w-full max-w-5xl grid lg:grid-cols-2 gap-6">
-        <div className="bg-white text-gray-900 p-6 rounded-2xl shadow">
-          <h2 className="text-xl font-bold mb-4">📈 Equity Growth</h2>
-          {equityCurve && equityCurve.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={equityCurve.map(d => ({ date: d.date || d.date, portfolio_equity: d.portfolio_equity || d.equity }))}>
-                <Line type="monotone" dataKey="portfolio_equity" stroke="#10b981" strokeWidth={2} dot={false}/>
-                <CartesianGrid stroke="#e6e6e6" strokeDasharray="3 3" />
-                <XAxis dataKey="date" tickFormatter={shortDate} />
-                <YAxis />
-                <Tooltip />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-sm text-gray-600">No equity data available yet — run a backtest to see the curve.</p>
-          )}
-        </div>
-
-        <div className="bg-white text-gray-900 p-6 rounded-2xl shadow">
-          <h2 className="text-xl font-bold mb-4">🥇 Win / Loss</h2>
-          {tradeList.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={[
-                    { name: "Wins", value: winCount },
-                    { name: "Losses", value: lossCount }
-                  ]}
-                  dataKey="value"
-                  innerRadius={50}
-                  outerRadius={90}
-                  label
-                >
-                  <Cell fill={COLORS[0]} />
-                  <Cell fill={COLORS[1]} />
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-sm text-gray-600">No trade data yet — run a backtest to populate trades.</p>
-          )}
-
-          <div className="mt-6">
-            <h3 className="font-semibold">Summary</h3>
-            <ul className="mt-2 text-sm text-gray-700">
-              <li><strong>Total PnL:</strong> {summary["Total PnL"] ?? "-"}</li>
-              <li><strong>Win Rate %:</strong> {summary["Win Rate %"] ?? "-"}</li>
-              <li><strong>Trades:</strong> {summary["Trades"] ?? tradeList.length}</li>
-            </ul>
-          </div>
-        </div>
+      <div style={{ marginBottom: 8 }}>
+        Start Date <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        End Date <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
       </div>
 
-      {/* History table */}
-      <div className="w-full max-w-5xl mt-6 bg-white/5 p-6 rounded-2xl">
-        <h3 className="text-lg font-bold mb-3">📜 Backtest History</h3>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left">
-            <thead>
-              <tr className="text-sm text-gray-300 bg-white/2">
-                <th className="p-2">Timestamp</th>
-                <th className="p-2">Strategy</th>
-                <th className="p-2 text-right">Total PnL</th>
-                <th className="p-2 text-right">Win Rate %</th>
-                <th className="p-2 text-right">Trades</th>
-                <th className="p-2">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((h, i) => (
-                <tr key={i} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="p-2 text-sm">{new Date(h.timestamp).toLocaleString()}</td>
-                  <td className="p-2 text-sm">{h.strategy}</td>
-                  <td className="p-2 text-sm text-right">{h.summary?.["Total PnL"] ?? "-"}</td>
-                  <td className="p-2 text-sm text-right">{h.summary?.["Win Rate %"] ?? "-"}</td>
-                  <td className="p-2 text-sm text-right">{h.summary?.["Trades"] ?? (h.trades?.length ?? 0)}</td>
-                  <td className="p-2 text-sm">
-                    <button onClick={() => setSelected(h)} className="px-3 py-1 rounded bg-yellow-400 text-black">View</button>
-                  </td>
-                </tr>
-              ))}
-              {history.length === 0 && (
-                <tr><td className="p-4 text-sm text-gray-400" colSpan={6}>No backtests saved yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+      <div style={{ marginTop: 10 }}>
+        <button onClick={handleRunNow} style={{ padding: "8px 10px", marginRight: 8 }}>Run Now</button>
+        <button onClick={handleRefreshHistory} style={{ padding: "8px 10px" }}>Refresh History</button>
       </div>
 
-      {/* Modal */}
-      {selected && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-white text-gray-900 rounded-2xl p-6 w-full max-w-4xl relative">
-            <button onClick={() => setSelected(null)} className="absolute top-3 right-4 text-xl">×</button>
-            <h4 className="text-xl font-bold mb-3">Details — {selected.strategy} — {new Date(selected.timestamp).toLocaleString()}</h4>
+      <div style={{ marginTop: 12 }}>
+        <strong>Last run:</strong> {latestRun ? latestRun.timestamp : "No runs yet"}
+      </div>
 
-            <div className="grid md:grid-cols-2 gap-4">
-              <div>
-                <h5 className="font-semibold mb-2">Equity Curve</h5>
-                <div style={{ width: "100%", height: 220 }}>
-                  <ResponsiveContainer>
-                    <LineChart data={selected.equity_curve || selected.equity || []}>
-                      <Line dataKey="portfolio_equity" stroke="#10b981" dot={false} />
-                      <CartesianGrid stroke="#eee" strokeDasharray="3 3"/>
-                      <XAxis dataKey="date" tickFormatter={shortDate}/>
-                      <YAxis/>
-                      <Tooltip/>
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+      <div style={{ marginTop: 10 }}>
+        {tokenOk ? <div style={{ color: "green" }}>✅ Kite token generated (preview: {tokenPreview})</div> :
+          <div style={{ color: "crimson" }}>❌ No Kite token found</div>}
+      </div>
 
-              <div>
-                <h5 className="font-semibold mb-2">Trades (first 100)</h5>
-                <div className="max-h-56 overflow-auto border rounded p-2">
-                  <table className="w-full text-sm">
-                    <thead className="text-left text-gray-600">
-                      <tr><th>Date</th><th>Action</th><th className="text-right">Price</th><th className="text-right">PnL</th></tr>
-                    </thead>
-                    <tbody>
-                      {(selected.trades || []).slice(0,100).map((t, idx) => (
-                        <tr key={idx} className="border-b">
-                          <td className="py-1">{t.Date || t.date}</td>
-                          <td className="py-1">{t.Action}</td>
-                          <td className="py-1 text-right">{t.Price ?? "-"}</td>
-                          <td className={`py-1 text-right ${ (t.PnL||0) > 0 ? 'text-green-600' : 'text-red-600'}`}>{t.PnL ?? "-"}</td>
-                        </tr>
-                      ))}
-                      {(!selected.trades || selected.trades.length===0) && (
-                        <tr><td className="p-2 text-gray-500" colSpan={4}>No trades</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
+      <div style={{ marginTop: 24 }}>
+        <h2>📈 Equity Growth</h2>
+        {equityData && equityData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={equityData}>
+              <XAxis dataKey="date" tickFormatter={(d) => d} />
+              <YAxis />
+              <Tooltip />
+              <Line type="monotone" dataKey="portfolio_equity" stroke="#00a86b" dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <div>No equity data available yet — run a backtest to see the curve.</div>
+        )}
+      </div>
 
-            <div className="mt-4 text-right">
-              <button onClick={() => setSelected(null)} className="px-4 py-2 rounded bg-gray-200">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <div style={{ marginTop: 24 }}>
+        <h2>🏅 Win / Loss</h2>
+        {winLossData && winLossData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie data={winLossData} dataKey="value" nameKey="name" outerRadius={80} label>
+                {winLossData.map((entry, index) => <Cell key={index} fill={index === 0 ? "#4CAF50" : "#F44336"} />)}
+              </Pie>
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        ) : (
+          <div>No trades yet — run a backtest to populate Win/Loss.</div>
+        )}
+      </div>
 
-      <footer className="mt-8 text-sm text-gray-400">© {new Date().getFullYear()} StockBot | FastAPI + React + Render</footer>
+      <div style={{ marginTop: 20, color: "#333" }}>
+        <strong>Status:</strong> {statusMessage}
+      </div>
+      <footer style={{ marginTop: 30, color: "#666" }}>
+        © {new Date().getFullYear()} StockBot | FastAPI + React + Render
+      </footer>
     </div>
   );
 }
