@@ -1,247 +1,151 @@
-import React, { useEffect, useState, useRef } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
+/* ---------- src/App.jsx ---------- */
+import React, { useEffect, useState } from 'react';
+import dayjs from 'dayjs';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
-const BACKEND = import.meta.env.VITE_BACKEND_URL || "https://stockbot-backend-39ec.onrender.com";
+const BACKEND = import.meta.env.VITE_BACKEND_URL || 'https://stockbot-backend-39ec.onrender.com';
 
-function shortDate(d) {
-  if (!d) return "";
-  // Expect d like "2025-11-13T..." or "2025-11-13"
-  return d.split("T")[0];
-}
+const colors = { win: '#2ecc71', loss: '#e74c3c', neutral: '#95a5a6' };
 
-export default function App() {
-  const [kiteActive, setKiteActive] = useState(false);
-  const [latestBacktest, setLatestBacktest] = useState(null);
+export default function App(){
+  const [kiteUrl, setKiteUrl] = useState('');
+  const [tokenOk, setTokenOk] = useState(false);
+  const [startDate, setStartDate] = useState('2024-03-01');
+  const [endDate, setEndDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [statusMsg, setStatusMsg] = useState('');
+  const [running, setRunning] = useState(false);
   const [equityData, setEquityData] = useState([]);
-  const [winLossData, setWinLossData] = useState([]);
-  const [startDate, setStartDate] = useState("2024-03-01");
-  const [endDate, setEndDate] = useState("2025-11-10");
-  const [strategy, setStrategy] = useState("swing");
-  const [status, setStatus] = useState("");
-  const polling = useRef(null);
-  const lastFetchTime = useRef(null); // used to detect new runs
+  const [wins, setWins] = useState(0);
+  const [losses, setLosses] = useState(0);
+  const [history, setHistory] = useState([]);
+  const [strategy, setStrategy] = useState('swing');
 
-  useEffect(() => {
-    checkConfig();
-    fetchHistory();
-    // cleanup on unmount
-    return () => {
-      if (polling.current) clearInterval(polling.current);
-    };
-  }, []);
+  useEffect(()=>{ checkHealth(); fetchHistory(); }, []);
 
-  async function checkConfig() {
-    try {
-      const r = await fetch(`${BACKEND}/config`);
+  async function checkHealth(){
+    try{
+      const r = await fetch(`${BACKEND}/health`);
       const j = await r.json();
-      setKiteActive(Boolean(j.kite_token_active));
-    } catch (e) {
-      console.error("config err", e);
-      setKiteActive(false);
+      setTokenOk(Boolean(j.token_valid));
+    }catch(e){
+      console.error('health', e);
+      setStatusMsg('Failed to contact backend');
     }
   }
 
-  async function fetchHistory() {
-    try {
-      const r = await fetch(`${BACKEND}/backtests`);
-      const j = await r.json();
-      if (j.status === "ok" && Array.isArray(j.data) && j.data.length > 0) {
-        const first = j.data[0]; // latest
-        setLatestBacktest(first);
-        mapCharts(first);
-        lastFetchTime.current = first.timestamp || null;
-      } else {
-        setLatestBacktest(null);
-        setEquityData([]);
-        setWinLossData([]);
-      }
-    } catch (e) {
-      console.error("history err", e);
-    }
-  }
-
-  function mapCharts(run) {
-    const eq = (run.equity_curve || run.equity || []).map(item => {
-      // item might be {date, portfolio_equity} or {"date": "2024-01-01", portfolio_equity: 123}
-      return {
-        date: item.date || item[0] || "",
-        portfolio_equity: Number(item.portfolio_equity ?? item.equity ?? item[1] ?? 0)
-      };
-    });
-    setEquityData(eq);
-
-    const trades = run.trades || [];
-    let wins = 0, losses = 0;
-    trades.forEach(t => {
-      const pnl = Number(t.PnL ?? t.PnL ?? 0);
-      if (!isNaN(pnl) && pnl > 0) wins++;
-      else losses++;
-    });
-
-    setWinLossData([{ name: "Wins", value: wins }, { name: "Losses", value: losses }]);
-  }
-
-  async function handleLogin() {
-    try {
-      setStatus("Getting login URL...");
+  async function fetchKiteLogin(){
+    try{
       const r = await fetch(`${BACKEND}/generate_token_url`);
       const j = await r.json();
-      if (j.login_url) {
-        // redirect to kite login
-        window.location.href = j.login_url;
-      } else {
-        setStatus("Login URL not returned");
-      }
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to reach backend for login");
-    }
+      if(j.login_url){
+        // open login in new tab
+        window.open(j.login_url, '_blank');
+        setStatusMsg('Opened Kite login — complete and return here');
+      } else setStatusMsg('Could not get login URL');
+    }catch(e){ setStatusMsg('Error fetching login URL'); }
   }
 
-  async function handleRunNow() {
-    setStatus("Starting backtest...");
-    try {
-      // remember current latest timestamp so we can detect new run
-      const prevTs = lastFetchTime.current;
-
-      const payload = {
-        strategy,
-        start_date: startDate,
-        end_date: endDate,
-        symbols_file: "nifty100.csv"
-      };
-
-      const r = await fetch(`${BACKEND}/run_strategy`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload)
-      });
-
-      if (r.status === 400) {
-        const j = await r.json();
-        setStatus("Failed to start: " + (j.detail || j.msg || JSON.stringify(j)));
-        return;
-      }
+  async function runBacktest(){
+    setRunning(true); setStatusMsg('Starting backtest...');
+    try{
+      const body = { strategy, start_date: startDate, end_date: endDate, symbols_file: 'nifty100.csv' };
+      const r = await fetch(`${BACKEND}/run_strategy`, { method: 'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
       const j = await r.json();
-      setStatus("Backtest launched. Polling for results...");
-
-      // poll /backtests until first item's timestamp is different/newer
-      if (polling.current) clearInterval(polling.current);
-      polling.current = setInterval(async () => {
-        try {
-          const res = await fetch(`${BACKEND}/backtests`);
-          const body = await res.json();
-          if (body.status === "ok" && Array.isArray(body.data) && body.data.length > 0) {
-            const top = body.data[0];
-            if (!prevTs || (top.timestamp && top.timestamp !== prevTs)) {
-              clearInterval(polling.current);
-              polling.current = null;
-              setLatestBacktest(top);
-              mapCharts(top);
-              lastFetchTime.current = top.timestamp;
-              setStatus("Backtest completed and loaded.");
-            } else {
-              setStatus("Waiting for backtest to finish...");
-            }
-          }
-        } catch (err) {
-          console.error("poll error", err);
-          setStatus("Polling error (see console).");
-        }
-      }, 3000);
-
-    } catch (e) {
-      console.error(e);
-      setStatus("Error launching backtest");
-    }
+      if(j.status === 'started'){
+        setStatusMsg('Backtest launched in background — refresh history in a moment');
+        setRunning(false);
+        setTimeout(()=>fetchHistory(), 4000);
+      } else setStatusMsg('Failed to start backtest');
+    }catch(e){ setStatusMsg('Error starting backtest'); setRunning(false); }
   }
+
+  async function fetchHistory(){
+    try{
+      const r = await fetch(`${BACKEND}/backtests`);
+      const j = await r.json();
+      if(j.status === 'ok'){
+        setHistory(j.data || []);
+        if(j.data && j.data.length){
+          const latest = j.data[0];
+          setEquityData(latest.equity_curve || []);
+          const t = latest.trades || [];
+          const w = t.filter(x=>x.PnL>0).length;
+          const l = t.filter(x=>x.PnL<=0).length;
+          setWins(w); setLosses(l);
+        }
+      }
+    }catch(e){ console.error('history', e); }
+  }
+
+  const pieData = [{ name:'Wins', value:wins }, { name:'Losses', value:losses }];
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 18, fontFamily: "Inter, system-ui, sans-serif" }}>
-      <h1 style={{ fontSize: 34 }}>⚡ StockBot Dashboard</h1>
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={handleLogin} style={{ padding: "8px 12px", marginRight: 10 }}>🔑 Login with Kite</button>
-        <span>Connected to backend: <b>{BACKEND}</b></span>
-      </div>
+    <div className="container">
+      <header>
+        <h1>⚡ StockBot Dashboard</h1>
+        <div className="controls">
+          <button onClick={fetchKiteLogin}>🔑 Login with Kite</button>
+          <div className="token">{ tokenOk ? '✅ Kite token present' : '❌ No Kite token' }</div>
+        </div>
+      </header>
 
-      <div style={{ marginBottom: 12 }}>
-        <label>Strategy </label>
-        <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
-          <option value="swing">Swing Strategy (ATR/MACD/RSI)</option>
-          <option value="momentum">Momentum (dev)</option>
-        </select>
-      </div>
+      <section className="form">
+        <label>Strategy
+          <select value={strategy} onChange={e=>setStrategy(e.target.value)}>
+            <option value="swing">Swing Strategy (ATR/MACD/RSI)</option>
+            <option value="momentum">Momentum (fast)</option>
+          </select>
+        </label>
 
-      <div style={{ marginBottom: 8 }}>
-        <div>Start Date</div>
-        <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-      </div>
+        <label>Start Date
+          <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} />
+        </label>
 
-      <div style={{ marginBottom: 8 }}>
-        <div>End Date</div>
-        <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-      </div>
+        <label>End Date
+          <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} />
+        </label>
 
-      <div style={{ marginTop: 10 }}>
-        <button onClick={handleRunNow} style={{ padding: "8px 10px", marginRight: 8 }}>Run Now</button>
-        <button onClick={fetchHistory} style={{ padding: "8px 10px" }}>Refresh History</button>
-      </div>
+        <div className="actions">
+          <button onClick={runBacktest} disabled={running}>Run Now</button>
+          <button onClick={fetchHistory}>Refresh History</button>
+        </div>
+        <div className="status">{statusMsg}</div>
+      </section>
 
-      <div style={{ marginTop: 12 }}>
-        <strong>Last run:</strong> {latestBacktest ? new Date(latestBacktest.timestamp).toLocaleString() : "No runs yet"}
-      </div>
-
-      <div style={{ marginTop: 8 }}>
-        {kiteActive ? <span style={{ color: "green" }}>✅ Kite token generated</span> :
-          <span style={{ color: "crimson" }}>❌ No Kite token found</span>}
-      </div>
-
-      <div style={{ marginTop: 24 }}>
+      <section className="charts">
         <h2>📈 Equity Growth</h2>
-        {equityData && equityData.length > 0 ? (
-          <div style={{ width: "100%", height: 320 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={equityData}>
-                <XAxis dataKey="date" tickFormatter={(d) => shortDate(d)} />
-                <YAxis />
-                <Tooltip />
-                <Line type="monotone" dataKey="portfolio_equity" stroke="#1976D2" dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+        {equityData && equityData.length ? (
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={equityData.map(d=>({ date: d.date, equity: d.portfolio_equity }))}>
+              <XAxis dataKey="date" tickFormatter={d=>dayjs(d).format('MM/DD')} />
+              <YAxis />
+              <Tooltip labelFormatter={l=>dayjs(l).format('YYYY-MM-DD')} />
+              <Line type="monotone" dataKey="equity" stroke="#16a085" dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
         ) : (
-          <div>No equity data available yet — run a backtest to see the curve.</div>
+          <div className="empty">No equity data available yet — run a backtest.</div>
         )}
-      </div>
 
-      <div style={{ marginTop: 24 }}>
-        <h2>🏆 Win / Loss</h2>
-        {winLossData && winLossData.length > 0 ? (
-          <div style={{ width: "100%", height: 260 }}>
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie data={winLossData} dataKey="value" nameKey="name" outerRadius={80} label>
-                  {winLossData.map((entry, index) => (
-                    <Cell key={index} fill={index === 0 ? "#4CAF50" : "#F44336"} />
-                  ))}
-                </Pie>
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+        <h2>🏅 Win / Loss</h2>
+        { (wins+losses) > 0 ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie data={pieData} dataKey="value" innerRadius={60} outerRadius={90} label>
+                {pieData.map((entry, idx)=> (
+                  <Cell key={`c-${idx}`} fill={entry.name==='Wins' ? colors.win : colors.loss} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
         ) : (
-          <div>No trades yet — run a backtest to populate Win/Loss.</div>
+          <div className="empty">No trades yet — run a backtest to populate Win/Loss.</div>
         )}
-      </div>
+      </section>
 
-      <div style={{ marginTop: 18, color: "#333" }}>
-        <strong>Status:</strong> {status}
-      </div>
-
-      <footer style={{ marginTop: 36, color: "#666" }}>
-        © {new Date().getFullYear()} StockBot | FastAPI + React
+      <footer>
+        <div>© 2025 StockBot | FastAPI + React + Render</div>
       </footer>
     </div>
   );
 }
-
