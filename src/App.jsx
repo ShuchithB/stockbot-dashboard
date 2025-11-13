@@ -1,4 +1,3 @@
-/* ---------- src/App.jsx ---------- */
 import React, { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -149,3 +148,4 @@ export default function App(){
     </div>
   );
 }
+
