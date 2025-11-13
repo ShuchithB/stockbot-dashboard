@@ -1,23 +1,22 @@
-body {
-  margin: 0;
-  padding: 0;
-  background: #fafafa;
-  color: #111;
-  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+/* ---------- src/styles.css ---------- */
+:root{ --pad:18px; --muted:#666; }
+body{ font-family: Inter, system-ui, Arial; margin:0; background:#fafafa; color:#111; }
+.container{ max-width:980px; margin:20px auto; padding:24px; }
+header{ display:flex; justify-content:space-between; align-items:center; }
+header h1{ margin:0; font-size:32px; }
+.controls{ display:flex; gap:12px; align-items:center }
+.controls button{ padding:10px 14px; border-radius:8px; background:#fff; border:1px solid #ddd; cursor:pointer }
+.token{ font-size:14px; color:var(--muted) }
+.form{ margin-top:20px; background:#fff; padding:16px; border-radius:8px; box-shadow:0 1px 0 rgba(0,0,0,0.03) }
+.form label{ display:block; margin-bottom:10px; font-weight:600 }
+.form input[type=date], .form select{ width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; background:#fafafa }
+.actions{ display:flex; gap:10px; margin-top:8px }
+.actions button{ padding:8px 12px; border-radius:8px; border:1px solid #ddd }
+.status{ margin-top:8px; color:var(--muted) }
+.charts{ margin-top:24px }
+.charts h2{ margin:12px 0 }
+.empty{ padding:30px; background:#fff; border-radius:8px; border:1px dashed #eee; color:var(--muted) }
+footer{ margin-top:30px; color:var(--muted); font-size:13px }
 
-input[type="date"], input[type="text"], select {
-  padding: 8px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  width: 100%;
-  max-width: 420px;
-}
-button {
-  border-radius: 6px;
-  border: 1px solid #ccc;
-  background: #fff;
-  cursor: pointer;
-}
+
+/* ---------- END ---------- */
