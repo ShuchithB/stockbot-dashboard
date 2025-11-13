@@ -1,8 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
-} from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || "https://stockbot-backend-39ec.onrender.com";
 
@@ -247,3 +244,4 @@ export default function App() {
     </div>
   );
 }
+
